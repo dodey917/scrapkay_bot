@@ -9,6 +9,7 @@ from telethon.tl.types import (
     InputPeerUser,
     InputPeerChannel
 )
+from telethon.tl.functions.messages import SendMessageRequest
 
 # Configuration
 API_ID = int(os.getenv('API_ID', 17752898))
@@ -22,25 +23,41 @@ user_limits = {}
 banned_users = {}
 verified_numbers = set()
 
-# Menu system - FIXED: Properly structured for Telethon
+# Menu system - FIXED implementation
 def create_main_menu():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton(text='🚀 Start Scraping'), KeyboardButton(text='📞 Contact Owner')],
-        [KeyboardButton(text='🔐 Verify Phone'), KeyboardButton(text='ℹ️ Bot Status')]
-    ])
+    buttons = [
+        [KeyboardButton(text='🚀 Start Scraping')],
+        [KeyboardButton(text='📞 Contact Owner')],
+        [KeyboardButton(text='🔐 Verify Phone')],
+        [KeyboardButton(text='ℹ️ Bot Status')]
+    ]
+    return ReplyKeyboardMarkup(rows=buttons)
 
 def create_cancel_menu():
-    return ReplyKeyboardMarkup([
-        [KeyboardButton(text='❌ Cancel')]
-    ])
+    return ReplyKeyboardMarkup(rows=[[KeyboardButton(text='❌ Cancel')]])
 
 # Initialize bot
 bot = TelegramClient('member_manager', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
+async def safe_respond(event, message, buttons=None):
+    """Safe message responder that handles keyboard markup properly"""
+    try:
+        if buttons:
+            await bot(SendMessageRequest(
+                peer=await event.get_input_chat(),
+                message=message,
+                reply_markup=buttons
+            ))
+        else:
+            await event.respond(message)
+    except Exception as e:
+        print(f"Error sending message: {e}")
+
 @bot.on(events.NewMessage(pattern='/start'))
 async def start(event):
     """Welcome message with main menu"""
-    await event.respond(
+    await safe_respond(
+        event,
         f"🤖 **Advanced Member Manager Bot**\n\n"
         f"Owner: @{OWNER_USERNAME}\n"
         "🔒 Verified users only\n"
@@ -53,7 +70,8 @@ async def start(event):
 async def verify_phone(event):
     """Phone verification initiation"""
     user_sessions[event.sender_id] = {'step': 'awaiting_phone'}
-    await event.respond(
+    await safe_respond(
+        event,
         "📱 Please send your phone number in international format:\n"
         "Example: +12345678900\n\n"
         "This verification helps prevent abuse.",
@@ -63,7 +81,8 @@ async def verify_phone(event):
 @bot.on(events.NewMessage(pattern='📞 Contact Owner'))
 async def contact_owner(event):
     """Contact information"""
-    await event.respond(
+    await safe_respond(
+        event,
         f"👨‍💻 Bot Owner: @{OWNER_USERNAME}\n"
         "For support or questions, please contact the owner directly.",
         buttons=create_main_menu()
@@ -84,7 +103,8 @@ async def bot_status(event):
     
     status_msg = "\n".join(status) if status else "✅ Account in good standing"
     
-    await event.respond(
+    await safe_respond(
+        event,
         f"📊 Your Account Status:\n{status_msg}\n\n"
         f"🌍 Server Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         buttons=create_main_menu()
@@ -97,19 +117,20 @@ async def start_scraping(event):
     
     # Check verification
     if user_id not in verified_numbers:
-        await event.respond("Please verify your phone number first", buttons=create_main_menu())
+        await safe_respond(event, "Please verify your phone number first", buttons=create_main_menu())
         return
     
     # Check ban status
     if user_id in banned_users:
         if time.time() < banned_users[user_id]['unban_time']:
             remaining = int((banned_users[user_id]['unban_time'] - time.time())/60)
-            await event.respond(f"⏳ Ban expires in {remaining} minutes", buttons=create_main_menu())
+            await safe_respond(event, f"⏳ Ban expires in {remaining} minutes", buttons=create_main_menu())
             return
         del banned_users[user_id]
     
     user_sessions[user_id] = {'step': 'awaiting_source'}
-    await event.respond(
+    await safe_respond(
+        event,
         "🔍 Please send the SOURCE group username or link:\n"
         "(Must be public group or channel)",
         buttons=create_cancel_menu()
@@ -125,7 +146,7 @@ async def handle_messages(event):
     if text == '❌ Cancel':
         if user_id in user_sessions:
             del user_sessions[user_id]
-        await event.respond("Operation cancelled", buttons=create_main_menu())
+        await safe_respond(event, "Operation cancelled", buttons=create_main_menu())
         return
     
     # Phone verification flow
@@ -133,13 +154,14 @@ async def handle_messages(event):
         if text.startswith('+') and text[1:].isdigit() and len(text) > 8:
             verified_numbers.add(user_id)
             user_sessions[user_id] = {'verified': True}
-            await event.respond(
+            await safe_respond(
+                event,
                 f"✅ Verified: {text}\n"
                 "You can now use all bot features",
                 buttons=create_main_menu()
             )
         else:
-            await event.respond("Invalid phone format. Please use +[countrycode][number]")
+            await safe_respond(event, "Invalid phone format. Please use +[countrycode][number]")
         return
     
     # Scraping flow
@@ -147,45 +169,47 @@ async def handle_messages(event):
         try:
             entity = await bot.get_entity(text)
             if not hasattr(entity, 'participants_count'):
-                await event.respond("This doesn't appear to be a group/channel")
+                await safe_respond(event, "This doesn't appear to be a group/channel")
                 return
             
             user_sessions[user_id].update({
                 'source': entity,
                 'step': 'awaiting_target'
             })
-            await event.respond(
+            await safe_respond(
+                event,
                 f"✅ Source set: {entity.title}\n"
                 "Now please send the TARGET group username or link:",
                 buttons=create_cancel_menu()
             )
         except Exception as e:
-            await event.respond(f"Error: {str(e)}")
+            await safe_respond(event, f"Error: {str(e)}")
             return
     
     elif user_id in user_sessions and user_sessions[user_id].get('step') == 'awaiting_target':
         try:
             entity = await bot.get_entity(text)
             if not hasattr(entity, 'participants_count'):
-                await event.respond("This doesn't appear to be a group/channel")
+                await safe_respond(event, "This doesn't appear to be a group/channel")
                 return
             
             user_sessions[user_id].update({
                 'target': entity,
                 'step': 'awaiting_count'
             })
-            await event.respond(
+            await safe_respond(
+                event,
                 f"✅ Target set: {entity.title}\n"
                 "How many members would you like to process? (Max 50):",
                 buttons=create_cancel_menu()
             )
         except Exception as e:
-            await event.respond(f"Error: {str(e)}")
+            await safe_respond(event, f"Error: {str(e)}")
             return
     
     elif user_id in user_sessions and user_sessions[user_id].get('step') == 'awaiting_count':
         if not text.isdigit() or not (1 <= int(text) <= 50):
-            await event.respond("Please enter a number between 1-50")
+            await safe_respond(event, "Please enter a number between 1-50")
             return
         
         count = int(text)
@@ -195,18 +219,19 @@ async def handle_messages(event):
         if user_id in user_limits:
             if user_limits[user_id]['count'] >= 50:
                 banned_users[user_id] = {'unban_time': time.time() + 3600}  # 1 hour ban
-                await event.respond(
+                await safe_respond(
+                    event,
                     "⛔ You've reached the hourly limit (50 adds)\n"
                     "Please try again in 1 hour",
                     buttons=create_main_menu()
                 )
                 return
             if time.time() - user_limits[user_id]['last_add'] < 300:  # 5 minute delay
-                await event.respond("Please wait 5 minutes between operations")
+                await safe_respond(event, "Please wait 5 minutes between operations")
                 return
         
         # Begin processing
-        await event.respond(f"⏳ Processing {count} members...")
+        await safe_respond(event, f"⏳ Processing {count} members...")
         
         try:
             added = 0
@@ -239,7 +264,8 @@ async def handle_messages(event):
                 except Exception as e:
                     continue
             
-            await event.respond(
+            await safe_respond(
+                event,
                 f"✅ Completed!\n"
                 f"Successfully added {added} members\n"
                 f"Hourly usage: {user_limits[user_id]['count']}/50\n\n"
@@ -248,7 +274,7 @@ async def handle_messages(event):
             )
             
         except Exception as e:
-            await event.respond(f"Critical error: {str(e)}", buttons=create_main_menu())
+            await safe_respond(event, f"Critical error: {str(e)}", buttons=create_main_menu())
         
         finally:
             if user_id in user_sessions:
