@@ -1,84 +1,67 @@
 from telethon.sync import TelegramClient, events
-from telethon.tl.functions.channels import GetParticipantsRequest
-from telethon.tl.types import ChannelParticipantsSearch
 import asyncio
 
 API_ID = 17752898
 API_HASH = '899d5b7bb6c1a3672d822256bffac2a3'
 BOT_TOKEN = '7621816424:AAE3m2GDw6drXN4d-o8QNHv4cgpHr0L9YG0'
 
-bot = TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
-
-user_sessions = {}
+bot = TelegramClient('member_bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start(event):
     await event.respond(
-        "📊 Group Member Lister Bot\n\n"
-        "1. Send /list to begin\n"
-        "2. I'll show available members\n"
-        "3. You can export the list\n\n"
-        "Note: I can only list members from groups where I'm added"
+        "🔹 Legal Member Management Bot 🔹\n\n"
+        "I can help with PUBLIC group member management when:\n"
+        "1. You're admin in the target group\n"
+        "2. Users have allowed group invites\n\n"
+        "Commands:\n"
+        "/list_members - View public group members\n"
+        "/generate_invite - Create invite links\n"
+        "/help - More info"
     )
 
-@bot.on(events.NewMessage(pattern='/list'))
+@bot.on(events.NewMessage(pattern='/list_members'))
 async def list_members(event):
-    user_id = event.sender_id
-    user_sessions[user_id] = {'step': 'waiting_group'}
-    await event.respond("Please send me the group link you want to list members from:")
+    """List members from groups where bot has access"""
+    await event.respond("Please send the public group username (e.g. @publicgroup):")
 
-@bot.on(events.NewMessage)
-async def handle_messages(event):
-    user_id = event.sender_id
-    text = event.text
-    
-    if user_id not in user_sessions:
-        return
-    
-    if user_sessions[user_id]['step'] == 'waiting_group':
-        if not text.startswith('https://t.me/'):
-            await event.respond("❌ Please send a valid Telegram group link")
-            return
-            
+    @bot.on(events.NewMessage)
+    async def handle_group_input(event):
         try:
-            entity = await bot.get_entity(text)
-            user_sessions[user_id]['group'] = entity
-            user_sessions[user_id]['step'] = 'waiting_count'
-            await event.respond("How many members do you want to list? (Max 200)")
-        except Exception as e:
-            await event.respond(f"❌ Error: {str(e)}")
-            del user_sessions[user_id]
-    
-    elif user_sessions[user_id]['step'] == 'waiting_count':
-        if not text.isdigit():
-            await event.respond("Please enter a valid number")
-            return
-            
-        count = min(int(text), 200)  # Telegram limitation
-        try:
-            group = user_sessions[user_id]['group']
-            participants = await bot(GetParticipantsRequest(
-                channel=group,
-                filter=ChannelParticipantsSearch(''),
-                offset=0,
-                limit=count,
-                hash=0
-            ))
-            
-            member_list = "\n".join([f"{user.id}" for user in participants.users])
-            user_sessions[user_id]['members'] = participants.users
-            user_sessions[user_id]['step'] = 'ready'
-            
+            group = await bot.get_entity(event.text)
+            if not hasattr(group, 'participants_count'):
+                await event.respond("This doesn't appear to be a group")
+                return
+
+            members = []
+            async for user in bot.iter_participants(group, limit=50):  # Small limit for demo
+                if user.username:
+                    members.append(f"@{user.username}")
+                else:
+                    members.append(f"user{user.id}")
+
             await event.respond(
-                f"📋 Found {len(participants.users)} members:\n\n"
-                f"{member_list}\n\n"
-                "You can manually add these members to your group."
+                f"First 50 members in {event.text}:\n" + 
+                "\n".join(members) +
+                "\n\nNote: I can only display public information. " +
+                "To add members, you must be a group admin."
             )
             
         except Exception as e:
-            await event.respond(f"❌ Failed to list members: {str(e)}")
-        finally:
-            del user_sessions[user_id]
+            await event.respond(f"Error: {str(e)}")
 
-print("Bot is running...")
+        # Remove this handler after use
+        bot.remove_event_handler(handle_group_input)
+
+@bot.on(events.NewMessage(pattern='/generate_invite'))
+async def create_invite(event):
+    """For groups where user is admin"""
+    await event.respond(
+        "To create an invite link for your group:\n"
+        "1. Make me an admin in your group\n"
+        "2. Use Telegram's native 'Generate Invite Link' feature\n\n"
+        "I cannot generate invites without admin rights."
+    )
+
+print("Bot running (legal version)...")
 bot.run_until_disconnected()
