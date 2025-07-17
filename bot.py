@@ -22,15 +22,15 @@ user_limits = {}
 banned_users = {}
 verified_numbers = set()
 
-# Menu system
+# Menu system (FIXED: Removed resize_keyboard parameter)
 def create_main_menu():
     return ReplyKeyboardMarkup([
         [KeyboardButton('🚀 Start Scraping'), KeyboardButton('📞 Contact Owner')],
         [KeyboardButton('🔐 Verify Phone'), KeyboardButton('ℹ️ Bot Status')]
-    ], resize_keyboard=True)
+    ])
 
 def create_cancel_menu():
-    return ReplyKeyboardMarkup([[KeyboardButton('❌ Cancel')]], resize_keyboard=True)
+    return ReplyKeyboardMarkup([[KeyboardButton('❌ Cancel')]])
 
 # Initialize bot
 bot = TelegramClient('member_manager', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
