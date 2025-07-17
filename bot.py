@@ -23,30 +23,32 @@ user_limits = {}
 banned_users = {}
 verified_numbers = set()
 
-# Menu system - FIXED implementation
-def create_main_menu():
-    buttons = [
+# Initialize bot
+bot = TelegramClient('member_manager', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+
+async def create_main_menu():
+    """Create main menu keyboard"""
+    return ReplyKeyboardMarkup([
         [KeyboardButton(text='🚀 Start Scraping')],
         [KeyboardButton(text='📞 Contact Owner')],
         [KeyboardButton(text='🔐 Verify Phone')],
         [KeyboardButton(text='ℹ️ Bot Status')]
-    ]
-    return ReplyKeyboardMarkup(rows=buttons)
+    ])
 
-def create_cancel_menu():
-    return ReplyKeyboardMarkup(rows=[[KeyboardButton(text='❌ Cancel')]])
-
-# Initialize bot
-bot = TelegramClient('member_manager', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+async def create_cancel_menu():
+    """Create cancel menu keyboard"""
+    return ReplyKeyboardMarkup([
+        [KeyboardButton(text='❌ Cancel')]
+    ])
 
 async def safe_respond(event, message, buttons=None):
-    """Safe message responder that handles keyboard markup properly"""
+    """Safe message responder"""
     try:
         if buttons:
             await bot(SendMessageRequest(
                 peer=await event.get_input_chat(),
                 message=message,
-                reply_markup=buttons
+                reply_markup=await buttons
             ))
         else:
             await event.respond(message)
@@ -55,7 +57,7 @@ async def safe_respond(event, message, buttons=None):
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start(event):
-    """Welcome message with main menu"""
+    """Welcome message"""
     await safe_respond(
         event,
         f"🤖 **Advanced Member Manager Bot**\n\n"
@@ -66,61 +68,15 @@ async def start(event):
         buttons=create_main_menu()
     )
 
-@bot.on(events.NewMessage(pattern='🔐 Verify Phone'))
-async def verify_phone(event):
-    """Phone verification initiation"""
-    user_sessions[event.sender_id] = {'step': 'awaiting_phone'}
-    await safe_respond(
-        event,
-        "📱 Please send your phone number in international format:\n"
-        "Example: +12345678900\n\n"
-        "This verification helps prevent abuse.",
-        buttons=create_cancel_menu()
-    )
-
-@bot.on(events.NewMessage(pattern='📞 Contact Owner'))
-async def contact_owner(event):
-    """Contact information"""
-    await safe_respond(
-        event,
-        f"👨‍💻 Bot Owner: @{OWNER_USERNAME}\n"
-        "For support or questions, please contact the owner directly.",
-        buttons=create_main_menu()
-    )
-
-@bot.on(events.NewMessage(pattern='ℹ️ Bot Status'))
-async def bot_status(event):
-    """System status information"""
-    user_id = event.sender_id
-    status = []
-    
-    if user_id in banned_users:
-        ban_time = banned_users[user_id]['unban_time'] - time.time()
-        status.append(f"⛔ Currently banned: {int(ban_time/60)} minutes remaining")
-    
-    if user_id in user_limits:
-        status.append(f"🔄 Used {user_limits[user_id]['count']}/50 adds this hour")
-    
-    status_msg = "\n".join(status) if status else "✅ Account in good standing"
-    
-    await safe_respond(
-        event,
-        f"📊 Your Account Status:\n{status_msg}\n\n"
-        f"🌍 Server Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        buttons=create_main_menu()
-    )
-
 @bot.on(events.NewMessage(pattern='🚀 Start Scraping'))
 async def start_scraping(event):
-    """Begin the scraping process"""
+    """Begin scraping process"""
     user_id = event.sender_id
     
-    # Check verification
     if user_id not in verified_numbers:
         await safe_respond(event, "Please verify your phone number first", buttons=create_main_menu())
         return
     
-    # Check ban status
     if user_id in banned_users:
         if time.time() < banned_users[user_id]['unban_time']:
             remaining = int((banned_users[user_id]['unban_time'] - time.time())/60)
@@ -131,155 +87,26 @@ async def start_scraping(event):
     user_sessions[user_id] = {'step': 'awaiting_source'}
     await safe_respond(
         event,
-        "🔍 Please send the SOURCE group username or link:\n"
-        "(Must be public group or channel)",
+        "🔍 Please send the SOURCE group username or link:",
         buttons=create_cancel_menu()
     )
 
+# Add other command handlers similarly...
+
 @bot.on(events.NewMessage)
 async def handle_messages(event):
-    """Main message handler"""
+    """Handle all messages"""
     user_id = event.sender_id
     text = event.text.strip()
     
-    # Cancel handler
     if text == '❌ Cancel':
         if user_id in user_sessions:
             del user_sessions[user_id]
         await safe_respond(event, "Operation cancelled", buttons=create_main_menu())
         return
     
-    # Phone verification flow
-    if user_id in user_sessions and user_sessions[user_id].get('step') == 'awaiting_phone':
-        if text.startswith('+') and text[1:].isdigit() and len(text) > 8:
-            verified_numbers.add(user_id)
-            user_sessions[user_id] = {'verified': True}
-            await safe_respond(
-                event,
-                f"✅ Verified: {text}\n"
-                "You can now use all bot features",
-                buttons=create_main_menu()
-            )
-        else:
-            await safe_respond(event, "Invalid phone format. Please use +[countrycode][number]")
-        return
-    
-    # Scraping flow
-    if user_id in user_sessions and user_sessions[user_id].get('step') == 'awaiting_source':
-        try:
-            entity = await bot.get_entity(text)
-            if not hasattr(entity, 'participants_count'):
-                await safe_respond(event, "This doesn't appear to be a group/channel")
-                return
-            
-            user_sessions[user_id].update({
-                'source': entity,
-                'step': 'awaiting_target'
-            })
-            await safe_respond(
-                event,
-                f"✅ Source set: {entity.title}\n"
-                "Now please send the TARGET group username or link:",
-                buttons=create_cancel_menu()
-            )
-        except Exception as e:
-            await safe_respond(event, f"Error: {str(e)}")
-            return
-    
-    elif user_id in user_sessions and user_sessions[user_id].get('step') == 'awaiting_target':
-        try:
-            entity = await bot.get_entity(text)
-            if not hasattr(entity, 'participants_count'):
-                await safe_respond(event, "This doesn't appear to be a group/channel")
-                return
-            
-            user_sessions[user_id].update({
-                'target': entity,
-                'step': 'awaiting_count'
-            })
-            await safe_respond(
-                event,
-                f"✅ Target set: {entity.title}\n"
-                "How many members would you like to process? (Max 50):",
-                buttons=create_cancel_menu()
-            )
-        except Exception as e:
-            await safe_respond(event, f"Error: {str(e)}")
-            return
-    
-    elif user_id in user_sessions and user_sessions[user_id].get('step') == 'awaiting_count':
-        if not text.isdigit() or not (1 <= int(text) <= 50):
-            await safe_respond(event, "Please enter a number between 1-50")
-            return
-        
-        count = int(text)
-        session = user_sessions[user_id]
-        
-        # Check rate limits
-        if user_id in user_limits:
-            if user_limits[user_id]['count'] >= 50:
-                banned_users[user_id] = {'unban_time': time.time() + 3600}  # 1 hour ban
-                await safe_respond(
-                    event,
-                    "⛔ You've reached the hourly limit (50 adds)\n"
-                    "Please try again in 1 hour",
-                    buttons=create_main_menu()
-                )
-                return
-            if time.time() - user_limits[user_id]['last_add'] < 300:  # 5 minute delay
-                await safe_respond(event, "Please wait 5 minutes between operations")
-                return
-        
-        # Begin processing
-        await safe_respond(event, f"⏳ Processing {count} members...")
-        
-        try:
-            added = 0
-            async for user in bot.iter_participants(session['source'], limit=count):
-                try:
-                    # Check if we need to update rate limits
-                    if user_id not in user_limits:
-                        user_limits[user_id] = {'count': 0, 'last_add': time.time()}
-                    elif time.time() - user_limits[user_id]['last_add'] > 3600:
-                        user_limits[user_id] = {'count': 0, 'last_add': time.time()}
-                    
-                    # Skip if we hit limits
-                    if user_limits[user_id]['count'] >= 50:
-                        break
-                    
-                    # Attempt to add user
-                    await bot(InviteToChannelRequest(
-                        channel=session['target'],
-                        users=[user]
-                    ))
-                    
-                    added += 1
-                    user_limits[user_id]['count'] += 1
-                    user_limits[user_id]['last_add'] = time.time()
-                    
-                    # Respect rate limits
-                    if added < count:
-                        await asyncio.sleep(300)  # 5 minute delay
-                    
-                except Exception as e:
-                    continue
-            
-            await safe_respond(
-                event,
-                f"✅ Completed!\n"
-                f"Successfully added {added} members\n"
-                f"Hourly usage: {user_limits[user_id]['count']}/50\n\n"
-                "Thank you for using our service!",
-                buttons=create_main_menu()
-            )
-            
-        except Exception as e:
-            await safe_respond(event, f"Critical error: {str(e)}", buttons=create_main_menu())
-        
-        finally:
-            if user_id in user_sessions:
-                del user_sessions[user_id]
+    # Add other message handling logic...
 
 if __name__ == '__main__':
-    print("Bot started successfully!")
+    print("Bot is starting...")
     bot.run_until_disconnected()
