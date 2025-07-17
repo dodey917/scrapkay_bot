@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 from datetime import datetime, timedelta
 from telethon.sync import TelegramClient, events
 from telethon.tl.types import (
@@ -100,7 +101,7 @@ async def start_scraping(event):
     # Check ban status
     if user_id in banned_users:
         if time.time() < banned_users[user_id]['unban_time']:
-            remaining = int((banned_users[user_id]['unban_time'] - time.time())/60
+            remaining = int((banned_users[user_id]['unban_time'] - time.time())/60)
             await event.respond(f"⏳ Ban expires in {remaining} minutes", buttons=create_main_menu())
             return
         del banned_users[user_id]
