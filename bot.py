@@ -4,11 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from telethon import TelegramClient, events
-from telethon.tl.types import (
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove
-)
+from telethon.tl.types import KeyboardButton, ReplyKeyboardMarkup
 
 # Configuration
 API_ID = 17752898
@@ -37,20 +33,110 @@ RATE_LIMIT = {
 
 bot = TelegramClient('member_manager', API_ID, API_HASH)
 
-async def create_main_menu():
-    """Main menu keyboard"""
-    return ReplyKeyboardMarkup([
-        [KeyboardButton(text='🚀 Start Scraping')],
-        [KeyboardButton(text='📞 Contact Owner')],
-        [KeyboardButton(text='🔐 Verify Phone')],
-        [KeyboardButton(text='ℹ️ Bot Status')]
-    ], resize=True, selective=True)
+async def safe_respond(event, message, parse_mode='md'):
+    """Safe message responder"""
+    try:
+        await event.respond(message, parse_mode=parse_mode)
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
 
-async def create_cancel_menu():
-    """Cancel menu keyboard"""
-    return ReplyKeyboardMarkup([
-        [KeyboardButton(text='❌ Cancel')]
-    ], resize=True, selective=True)
+@bot.on(events.NewMessage(pattern='/start'))
+async def start(event):
+    """Start command handler"""
+    user_id = event.sender_id
+    
+    if user_id in banned_users and time.time() < banned_users[user_id]['unban_time']:
+        remaining = int((banned_users[user_id]['unban_time'] - time.time()) / 60)
+        await safe_respond(event, f"⛔ Banned. Try again in {remaining:.0f} minutes.")
+        return
+    
+    await safe_respond(
+        event,
+        f"🤖 **Member Manager Bot**\n\n"
+        f"Owner: @{OWNER_USERNAME}\n"
+        "🔒 Verified users only\n"
+        "⏳ Rate limited for safety\n\n"
+        "Available commands:\n"
+        "/start - Show this message\n"
+        "/scrape - Start scraping\n"
+        "/verify - Verify your phone\n"
+        "/status - Bot status"
+    )
+
+@bot.on(events.NewMessage(pattern='/scrape'))
+async def start_scraping(event):
+    """Scraping handler"""
+    user_id = event.sender_id
+    
+    if user_id not in verified_numbers:
+        await safe_respond(event, "🔒 Please verify your phone first using /verify")
+        return
+    
+    if await is_rate_limited(user_id, 'scraping'):
+        await safe_respond(event, "⚠️ Rate limit exceeded. Try again later.")
+        return
+    
+    user_sessions[user_id] = {'step': 'awaiting_source'}
+    await safe_respond(event, "🔍 Send SOURCE group username or link:")
+
+@bot.on(events.NewMessage(pattern='/verify'))
+async def verify_phone(event):
+    """Phone verification handler"""
+    user_id = event.sender_id
+    user_sessions[user_id] = {'step': 'awaiting_phone'}
+    await safe_respond(event, "📱 Send your phone number in international format (e.g., +1234567890):")
+
+@bot.on(events.NewMessage(pattern='/status'))
+async def bot_status(event):
+    """Bot status handler"""
+    status_msg = (
+        "🤖 **Bot Status**\n\n"
+        f"👥 Users in session: {len(user_sessions)}\n"
+        f"✅ Verified users: {len(verified_numbers)}\n"
+        f"⛔ Banned users: {len(banned_users)}\n\n"
+        f"🔄 Last restart: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    )
+    await safe_respond(event, status_msg)
+
+@bot.on(events.NewMessage(pattern='/cancel'))
+async def cancel(event):
+    """Cancel handler"""
+    user_id = event.sender_id
+    if user_id in user_sessions:
+        del user_sessions[user_id]
+    await safe_respond(event, "❌ Operation cancelled")
+
+@bot.on(events.NewMessage)
+async def handle_messages(event):
+    """Main message handler"""
+    user_id = event.sender_id
+    text = event.text.strip()
+    
+    if user_id in user_sessions:
+        session = user_sessions[user_id]
+        
+        if session.get('step') == 'awaiting_phone':
+            if text.startswith('+') and text[1:].isdigit():
+                verified_numbers.add(user_id)
+                del user_sessions[user_id]
+                await safe_respond(event, "✅ Phone number verified! You can now use /scrape")
+            else:
+                await safe_respond(event, "❌ Invalid format. Please use international format (e.g., +1234567890)")
+        
+        elif session.get('step') == 'awaiting_source':
+            session['source'] = text
+            session['step'] = 'awaiting_target'
+            await safe_respond(event, "🎯 Send TARGET group username or link:")
+        
+        elif session.get('step') == 'awaiting_target':
+            session['target'] = text
+            del user_sessions[user_id]
+            await safe_respond(
+                event,
+                f"🔍 Starting scrape...\nSource: {session['source']}\nTarget: {session['target']}\n\n"
+                "This might take a while..."
+            )
+            # Add your scraping logic here
 
 async def is_rate_limited(user_id, action_type):
     """Check rate limits"""
@@ -73,98 +159,6 @@ async def is_rate_limited(user_id, action_type):
     
     limit['count'] += 1
     return False
-
-async def safe_respond(event, message, buttons=None, parse_mode='md'):
-    """Safe message responder"""
-    try:
-        if buttons:
-            await event.respond(message, buttons=await buttons, parse_mode=parse_mode)
-        else:
-            await event.respond(message, parse_mode=parse_mode)
-    except Exception as e:
-        logger.error(f"Error sending message: {e}")
-
-@bot.on(events.NewMessage(pattern='/start'))
-async def start(event):
-    """Start command handler"""
-    user_id = event.sender_id
-    
-    if user_id in banned_users and time.time() < banned_users[user_id]['unban_time']:
-        remaining = int((banned_users[user_id]['unban_time'] - time.time()) / 60)
-        await safe_respond(event, f"⛔ Banned. Try again in {remaining:.0f} minutes.")
-        return
-    
-    await safe_respond(
-        event,
-        f"🤖 **Member Manager Bot**\n\n"
-        f"Owner: @{OWNER_USERNAME}\n"
-        "🔒 Verified users only\n"
-        "⏳ Rate limited for safety\n",
-        buttons=create_main_menu()
-    )
-
-@bot.on(events.NewMessage(pattern='🚀 Start Scraping'))
-async def start_scraping(event):
-    """Scraping handler"""
-    user_id = event.sender_id
-    
-    if user_id not in verified_numbers:
-        await safe_respond(event, "🔒 Please verify your phone first", buttons=create_main_menu())
-        return
-    
-    if await is_rate_limited(user_id, 'scraping'):
-        await safe_respond(event, "⚠️ Rate limit exceeded. Try again later.", buttons=create_main_menu())
-        return
-    
-    user_sessions[user_id] = {'step': 'awaiting_source'}
-    await safe_respond(event, "🔍 Send SOURCE group username/link:", buttons=create_cancel_menu())
-
-@bot.on(events.NewMessage(pattern='🔐 Verify Phone'))
-async def verify_phone(event):
-    """Phone verification handler"""
-    user_id = event.sender_id
-    user_sessions[user_id] = {'step': 'awaiting_phone'}
-    await safe_respond(event, "📱 Send phone (e.g., +1234567890):", buttons=create_cancel_menu())
-
-@bot.on(events.NewMessage(pattern='❌ Cancel'))
-async def cancel(event):
-    """Cancel handler"""
-    user_id = event.sender_id
-    if user_id in user_sessions:
-        del user_sessions[user_id]
-    await safe_respond(event, "❌ Cancelled", buttons=create_main_menu())
-
-@bot.on(events.NewMessage)
-async def handle_messages(event):
-    """Main message handler"""
-    user_id = event.sender_id
-    text = event.text.strip()
-    
-    if user_id in user_sessions:
-        session = user_sessions[user_id]
-        
-        if session.get('step') == 'awaiting_phone':
-            if text.startswith('+') and text[1:].isdigit():
-                verified_numbers.add(user_id)
-                del user_sessions[user_id]
-                await safe_respond(event, "✅ Verified!", buttons=create_main_menu())
-            else:
-                await safe_respond(event, "❌ Invalid format (e.g., +1234567890)")
-        
-        elif session.get('step') == 'awaiting_source':
-            session['source'] = text
-            session['step'] = 'awaiting_target'
-            await safe_respond(event, "🎯 Send TARGET group username/link:", buttons=create_cancel_menu())
-        
-        elif session.get('step') == 'awaiting_target':
-            session['target'] = text
-            del user_sessions[user_id]
-            await safe_respond(
-                event,
-                f"🔍 Starting scrape...\nSource: {session['source']}\nTarget: {session['target']}",
-                buttons=create_main_menu()
-            )
-            # Add your scraping logic here
 
 async def main():
     """Main function"""
