@@ -30,8 +30,8 @@ def home():
 async def scrape_members():
     try:
         data = request.json
-        source = data.get('source')
-        target = data.get('target')
+        source = data.get('https://t.me/cryptpmedia')
+        target = data.get('https://t.me/growandhelp')
         
         if not source or not target:
             return jsonify({"error": "Both source and target parameters are required"}), 400
