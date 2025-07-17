@@ -1,8 +1,8 @@
 import os
 import time
 import asyncio
-from datetime import datetime, timedelta
-from telethon.sync import TelegramClient, events
+from datetime import datetime
+from telethon import TelegramClient, events
 from telethon.tl.types import (
     KeyboardButton,
     ReplyKeyboardMarkup,
@@ -22,15 +22,17 @@ user_limits = {}
 banned_users = {}
 verified_numbers = set()
 
-# Menu system (FIXED: Removed resize_keyboard parameter)
+# Menu system - FIXED: Properly structured for Telethon
 def create_main_menu():
     return ReplyKeyboardMarkup([
-        [KeyboardButton('🚀 Start Scraping'), KeyboardButton('📞 Contact Owner')],
-        [KeyboardButton('🔐 Verify Phone'), KeyboardButton('ℹ️ Bot Status')]
+        [KeyboardButton(text='🚀 Start Scraping'), KeyboardButton(text='📞 Contact Owner')],
+        [KeyboardButton(text='🔐 Verify Phone'), KeyboardButton(text='ℹ️ Bot Status')]
     ])
 
 def create_cancel_menu():
-    return ReplyKeyboardMarkup([[KeyboardButton('❌ Cancel')]])
+    return ReplyKeyboardMarkup([
+        [KeyboardButton(text='❌ Cancel')]
+    ])
 
 # Initialize bot
 bot = TelegramClient('member_manager', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
