@@ -1,80 +1,116 @@
-import os
-import asyncio
-from flask import Flask, request, jsonify
-from telethon import TelegramClient, errors
+from telethon.sync import TelegramClient, events
 from telethon.tl.functions.channels import InviteToChannelRequest
+import asyncio
 
-app = Flask(__name__)
-
-# Configuration - REPLACE WITH YOUR CREDS
+# Your credentials
 API_ID = 17752898
 API_HASH = '899d5b7bb6c1a3672d822256bffac2a3'
 BOT_TOKEN = '7621816424:AAE3m2GDw6drXN4d-o8QNHv4cgpHr0L9YG0'
-PORT = 50
+
+# User session storage
+user_sessions = {}
 
 # Initialize client
-client = TelegramClient('bot_session', API_ID, API_HASH)
+bot = TelegramClient('bot_session', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-async def start_client():
-    await client.start(bot_token=BOT_TOKEN)
-    print("Client Created")
+@bot.on(events.NewMessage(pattern='/start'))
+async def start(event):
+    """Send welcome message and instructions"""
+    await event.respond(
+        "🤖 **Telegram Member Manager Bot**\n\n"
+        "Send me:\n"
+        "1. First send the SOURCE group link (where to scrape members from)\n"
+        "2. Then send the TARGET group link (where to add members)\n\n"
+        "Example:\n"
+        "`https://t.me/source_group`\n"
+        "`https://t.me/target_group`\n\n"
+        "Note: I must be admin in both groups!"
+    )
+    user_sessions[event.sender_id] = {'step': 'waiting_source'}
 
-# Start the client when app starts
-asyncio.run(start_client())
-
-@app.route('/')
-def home():
-    return "Telegram Scraper Bot is Running!"
-
-@app.route('/scrape', methods=['POST'])
-async def scrape_members():
-    try:
-        data = request.json
-        source = data.get('https://t.me/cryptpmedia')
-        target = data.get('https://t.me/growandhelp')
-        
-        if not source or not target:
-            return jsonify({"error": "Both source and target parameters are required"}), 400
-        
-        async with client:
-            try:
-                # Get entities
-                source_entity = await client.get_entity(source)
-                target_entity = await client.get_entity(target)
-                
-                # Scrape members (limited to 5 for testing)
-                members = await client.get_participants(source_entity, limit=5)
-                
-                # Add members with rate limiting
-                results = []
-                for user in members:
-                    try:
-                        await client(InviteToChannelRequest(target_entity, [user]))
-                        results.append(f"Added {user.id}")
-                        await asyncio.sleep(15)  # Increased delay to avoid limits
-                    except errors.UserPrivacyRestrictedError:
-                        results.append(f"Failed {user.id}: Privacy restricted")
-                    except errors.FloodWaitError as e:
-                        results.append(f"Failed {user.id}: Flood wait {e.seconds} seconds")
-                        await asyncio.sleep(e.seconds)
-                    except Exception as e:
-                        results.append(f"Failed {user.id}: {str(e)}")
-                
-                return jsonify({
-                    "status": "completed",
-                    "results": results,
-                    "stats": {
-                        "total": len(members),
-                        "success": len([r for r in results if "Added" in r]),
-                        "failed": len([r for r in results if "Failed" in r])
-                    }
-                })
-                
-            except Exception as e:
-                return jsonify({"error": f"Entity resolution failed: {str(e)}"}), 400
+@bot.on(events.NewMessage)
+async def handle_messages(event):
+    user_id = event.sender_id
+    text = event.text
+    
+    # Skip if not in a session
+    if user_id not in user_sessions:
+        return
+    
+    # Handle source link
+    if user_sessions[user_id]['step'] == 'waiting_source':
+        if not text.startswith('https://t.me/'):
+            await event.respond("❌ Please send a valid Telegram group link (starting with https://t.me/)")
+            return
             
-    except Exception as e:
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+        user_sessions[user_id] = {
+            'source': text,
+            'step': 'waiting_target'
+        }
+        await event.respond("✅ Source group saved! Now send the TARGET group link:")
+    
+    # Handle target link
+    elif user_sessions[user_id]['step'] == 'waiting_target':
+        if not text.startswith('https://t.me/'):
+            await event.respond("❌ Please send a valid Telegram group link (starting with https://t.me/)")
+            return
+            
+        user_sessions[user_id]['target'] = text
+        user_sessions[user_id]['step'] = 'ready'
+        
+        # Confirm before starting
+        await event.respond(
+            f"🔍 Will scrape members from:\n{user_sessions[user_id]['source']}\n\n"
+            f"➡️ And add them to:\n{user_sessions[user_id]['target']}\n\n"
+            "Type /confirm to start or /cancel to abort"
+        )
+    
+    # Handle confirmation
+    elif text == '/confirm' and user_sessions[user_id]['step'] == 'ready':
+        await event.respond("⏳ Starting the process... (This may take a while)")
+        
+        try:
+            async with bot:
+                # Get entities
+                source_entity = await bot.get_entity(user_sessions[user_id]['source'])
+                target_entity = await bot.get_entity(user_sessions[user_id]['target'])
+                
+                # Scrape members
+                members = await bot.get_participants(source_entity, limit=50)
+                
+                # Process members
+                success = 0
+                failed = 0
+                total = len(members)
+                
+                for i, user in enumerate(members):
+                    try:
+                        await bot(InviteToChannelRequest(target_entity, [user]))
+                        success += 1
+                        if i % 5 == 0:  # Update progress every 5 users
+                            await event.respond(f"🔄 Processed {i+1}/{total} users...")
+                        await asyncio.sleep(15)  # Important delay
+                    except Exception as e:
+                        failed += 1
+                        
+                # Final report
+                await event.respond(
+                    f"✅ Process completed!\n\n"
+                    f"• Total members: {total}\n"
+                    f"• Successfully added: {success}\n"
+                    f"• Failed: {failed}\n\n"
+                    f"Type /start to begin again"
+                )
+                
+        except Exception as e:
+            await event.respond(f"❌ Error: {str(e)}")
+        
+        # Clear session
+        del user_sessions[user_id]
+    
+    elif text == '/cancel':
+        await event.respond("🚫 Operation cancelled")
+        del user_sessions[user_id]
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=PORT)
+print("Bot is running...")
+bot.run_until_disconnected()
