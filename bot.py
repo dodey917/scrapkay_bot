@@ -14,7 +14,6 @@ from telethon.tl.types import (
 API_ID = 17752898
 API_HASH = '899d5b7bb6c1a3672d822256bffac2a3'
 BOT_TOKEN = '7621816424:AAE3m2GDw6drXN4d-o8QNHv4cgpHr0L9YG0'
-OWNER_USERNAME = 'freeblezzy'
 
 # Setup logging
 logging.basicConfig(
@@ -26,12 +25,14 @@ logger = logging.getLogger(__name__)
 # User management
 user_sessions = {}
 verified_users = set()
+scraped_data = {}
 
 class BotStates:
     MAIN_MENU = 0
     AWAITING_SOURCE = 1
-    AWAITING_TARGET = 2
+    SCRAPING_OPTIONS = 2
     AWAITING_PHONE = 3
+    LISTING_DATA = 4
 
 async def create_keyboard(buttons):
     """Create a reply keyboard markup"""
@@ -43,9 +44,9 @@ async def create_keyboard(buttons):
 
 async def show_main_menu(event):
     """Display the main menu"""
-    buttons = ['🚀 Start Scraping', '📞 Contact Owner', '🔐 Verify Phone', 'ℹ️ Bot Status']
+    buttons = ['🚀 Start Scraping', '📋 List Scraped Data', '🔐 Verify Phone', 'ℹ️ Bot Status']
     await event.respond(
-        "🤖 **Member Manager Bot**\n\n"
+        "🤖 **Advanced Member Scraper Bot**\n\n"
         "Select an option:",
         buttons=await create_keyboard(buttons)
     )
@@ -56,6 +57,22 @@ async def show_cancel_menu(event, message):
         message,
         buttons=await create_keyboard(['❌ Cancel'])
     )
+
+async def scrape_members(client, entity):
+    """Powerful scraping function that doesn't require bot to join group"""
+    try:
+        participants = []
+        async for user in client.iter_participants(entity):
+            if user.username:
+                participants.append(f"@{user.username}")
+            elif user.phone:
+                participants.append(f"Phone: {user.phone}")
+            else:
+                participants.append(f"User ID: {user.id}")
+        return participants
+    except Exception as e:
+        logger.error(f"Scraping error: {e}")
+        return None
 
 @bot.on(events.NewMessage(pattern='/start'))
 async def start_handler(event):
@@ -72,7 +89,21 @@ async def start_scraping_handler(event):
         return
     
     user_sessions[user_id] = {'state': BotStates.AWAITING_SOURCE}
-    await show_cancel_menu(event, "🔍 Please send the SOURCE group username or link:")
+    await show_cancel_menu(event, "🔍 Please send the group username or link you want to scrape:")
+
+@bot.on(events.NewMessage(pattern='📋 List Scraped Data'))
+async def list_data_handler(event):
+    """Handle listing scraped data"""
+    user_id = event.sender_id
+    if user_id in scraped_data:
+        user_sessions[user_id] = {'state': BotStates.LISTING_DATA}
+        buttons = list(scraped_data[user_id].keys()) + ['❌ Cancel']
+        await event.respond(
+            "📁 Your scraped data:\nSelect an item to view:",
+            buttons=await create_keyboard(buttons)
+        )
+    else:
+        await event.respond("You haven't scraped any data yet")
 
 @bot.on(events.NewMessage(pattern='🔐 Verify Phone'))
 async def verify_phone_handler(event):
@@ -88,14 +119,10 @@ async def status_handler(event):
         "🤖 **Bot Status**\n\n"
         f"👥 Active sessions: {len(user_sessions)}\n"
         f"✅ Verified users: {len(verified_users)}\n"
+        f"📊 Data collected: {sum(len(v) for v in scraped_data.values())} records\n"
         f"🔄 Last restart: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     await event.respond(status_msg)
-
-@bot.on(events.NewMessage(pattern='📞 Contact Owner'))
-async def contact_handler(event):
-    """Handle contact request"""
-    await event.respond(f"📩 Contact the owner @{OWNER_USERNAME} for support")
 
 @bot.on(events.NewMessage(pattern='❌ Cancel'))
 async def cancel_handler(event):
@@ -127,33 +154,42 @@ async def message_handler(event):
             await event.respond("❌ Invalid format. Please use international format (e.g., +1234567890)")
     
     elif session['state'] == BotStates.AWAITING_SOURCE:
-        session['source'] = text
-        session['state'] = BotStates.AWAITING_TARGET
-        await show_cancel_menu(event, "🎯 Please send the TARGET group username or link:")
-    
-    elif session['state'] == BotStates.AWAITING_TARGET:
-        session['target'] = text
-        del user_sessions[user_id]
-        
-        # Here you would add your actual scraping logic
-        await show_main_menu(event)
-        await event.respond(
-            f"🚀 Starting scraping process...\n"
-            f"Source: {session['source']}\n"
-            f"Target: {session['target']}\n\n"
-            "This may take several minutes..."
-        )
-        
-        # Example scraping implementation (replace with your actual code)
         try:
-            # Simulate scraping
-            await asyncio.sleep(2)
-            await event.respond("🔄 Scraping members...")
-            await asyncio.sleep(3)
-            await event.respond("✅ Successfully scraped 150 members")
+            await event.respond("🔄 Starting scraping process...")
+            entity = await bot.get_entity(text)
+            members = await scrape_members(bot, entity)
+            
+            if members:
+                if user_id not in scraped_data:
+                    scraped_data[user_id] = {}
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+                scraped_data[user_id][f"Scraped {timestamp}"] = members
+                
+                await show_main_menu(event)
+                await event.respond(
+                    f"✅ Successfully scraped {len(members)} members!\n"
+                    f"Use '📋 List Scraped Data' to view your results"
+                )
+            else:
+                await event.respond("❌ Failed to scrape members. Please try again")
+            
+            del user_sessions[user_id]
         except Exception as e:
             logger.error(f"Scraping failed: {e}")
-            await event.respond("❌ Scraping failed. Please try again later")
+            await event.respond("❌ Error scraping group. Please check the link/username and try again")
+            del user_sessions[user_id]
+    
+    elif session['state'] == BotStates.LISTING_DATA:
+        if text in scraped_data[user_id]:
+            data = scraped_data[user_id][text]
+            chunk_size = 50
+            for i in range(0, len(data), chunk_size):
+                chunk = data[i:i + chunk_size]
+                await event.respond("\n".join(chunk))
+            await show_main_menu(event)
+            del user_sessions[user_id]
+        elif text != '❌ Cancel':
+            await event.respond("Please select a valid option from the list")
 
 async def main():
     """Main application entry point"""
